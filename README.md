@@ -36,7 +36,26 @@ python vector_video.py vsv-to-mp4 \
   --fps 240
 ```
 
-## 3) SVG direkt zu MP4 (bestehender Modus)
+## 3) VSV als simples UI-Player-Paket exportieren
+
+So bekommst du einen direkt nutzbaren Browser-Player (HTML + `manifest.json` + `frames/*.svg`) mit variablen Parametern wie FPS, Speed, Seek und Interpolation:
+
+```bash
+python vector_video.py vsv-to-ui \
+  --input out/video.vsv \
+  --output out/ui-player \
+  --title "Mein VSV Player"
+```
+
+Danach reicht ein statischer Webserver, z. B.:
+
+```bash
+python -m http.server 8000 --directory out/ui-player
+```
+
+Dann im Browser öffnen: `http://localhost:8000`
+
+## 4) SVG direkt zu MP4 (bestehender Modus)
 
 ```bash
 python vector_video.py svg-to-mp4 \
