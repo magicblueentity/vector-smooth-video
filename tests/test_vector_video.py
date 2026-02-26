@@ -43,3 +43,34 @@ def test_vsv_to_mp4_rejects_invalid_fps() -> None:
         assert "fps" in str(exc).lower()
     else:
         raise AssertionError("Expected ValueError for fps=0")
+
+
+def test_parse_args_vsv_to_ui() -> None:
+    args = vector_video.parse_args(["vsv-to-ui", "--input", "clip.vsv", "--output", "ui"])
+    assert args.command == "vsv-to-ui"
+    assert args.title == "VSV Player"
+
+
+def test_build_ui_html_contains_controls() -> None:
+    html = vector_video.build_ui_html("Demo")
+    assert "Output FPS" in html
+    assert "id=\"speed\"" in html
+    assert "fetch('manifest.json')" in html
+
+
+def test_vsv_to_ui_extracts_archive_and_writes_index(tmp_path: Path) -> None:
+    vsv_path = tmp_path / "sample.vsv"
+    out_dir = tmp_path / "ui"
+
+    import zipfile
+
+    with zipfile.ZipFile(vsv_path, "w") as archive:
+        archive.writestr("manifest.json", '{"source_fps":24,"frame_count":1,"width":1,"height":1}')
+        archive.writestr("frames/frame_000001.svg", "<svg/>")
+
+    vector_video.vsv_to_ui(vsv_path, out_dir, "Demo Player", False)
+
+    assert (out_dir / "manifest.json").exists()
+    assert (out_dir / "frames" / "frame_000001.svg").exists()
+    index_html = (out_dir / "index.html").read_text()
+    assert "Demo Player" in index_html

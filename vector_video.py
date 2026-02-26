@@ -66,6 +66,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     vsv_to_mp4.add_argument("--converter", choices=("auto", "rsvg-convert", "inkscape", "cairosvg"), default="auto")
     vsv_to_mp4.add_argument("--dry-run", action="store_true")
 
+    vsv_to_ui = sub.add_parser(
+        "vsv-to-ui",
+        help="Extract .vsv and generate a simple browser player UI with variable playback parameters",
+    )
+    vsv_to_ui.add_argument("--input", required=True, help="Source .vsv file")
+    vsv_to_ui.add_argument("--output", required=True, help="Target directory for player assets")
+    vsv_to_ui.add_argument("--title", default="VSV Player", help="HTML page title")
+    vsv_to_ui.add_argument("--dry-run", action="store_true")
+
     return parser.parse_args(argv)
 
 
@@ -271,6 +280,117 @@ def vsv_to_mp4(input_vsv: Path, output_mp4: Path, fps: int, converter: str, dry_
         encode_video(str(frames_dir / "frame_%06d.png"), output_mp4, fps, width, height, dry_run, "sequence", 0)
 
 
+def build_ui_html(title: str) -> str:
+    return f"""<!doctype html>
+<html lang=\"en\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
+  <title>{title}</title>
+  <style>
+    body {{ font-family: system-ui, sans-serif; margin: 0; background: #121212; color: #f1f1f1; }}
+    .app {{ max-width: 1100px; margin: 0 auto; padding: 16px; }}
+    .video {{ background: #fff; border-radius: 8px; display: flex; align-items: center; justify-content: center; min-height: 360px; overflow: hidden; }}
+    #frame {{ width: 100%; height: auto; max-height: 75vh; }}
+    .controls {{ margin-top: 12px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }}
+    label {{ display: flex; flex-direction: column; font-size: 13px; gap: 4px; }}
+    button {{ padding: 8px 10px; border-radius: 6px; border: 1px solid #555; background: #1f1f1f; color: #f1f1f1; cursor: pointer; }}
+    input[type=\"range\"] {{ width: 100%; }}
+  </style>
+</head>
+<body>
+  <div class=\"app\">
+    <h1>{title}</h1>
+    <div class=\"video"><img id=\"frame\" alt=\"VSV frame\" /></div>
+    <div class=\"controls\">
+      <label>Output FPS <input id=\"fps\" type=\"number\" min=\"1\" max=\"1000\" value=\"120\"></label>
+      <label>Speed <input id=\"speed\" type=\"number\" min=\"0.1\" max=\"4\" step=\"0.1\" value=\"1\"></label>
+      <label>Seek <input id=\"seek\" type=\"range\" min=\"1\" max=\"1\" value=\"1\"></label>
+      <label><span>Interpolation</span><select id=\"interpolation\"><option value=\"auto\">auto</option><option value=\"pixelated\">pixelated</option></select></label>
+      <button id=\"play\">Play</button>
+      <button id=\"pause\">Pause</button>
+      <button id=\"reset\">Reset</button>
+    </div>
+    <p id=\"status\"></p>
+  </div>
+  <script>
+    const state = {{ playing: false, frame: 1, elapsed: 0, lastTs: null }};
+    const frameEl = document.getElementById('frame');
+    const fpsEl = document.getElementById('fps');
+    const speedEl = document.getElementById('speed');
+    const seekEl = document.getElementById('seek');
+    const interpolationEl = document.getElementById('interpolation');
+    const statusEl = document.getElementById('status');
+    let manifest;
+
+    function framePath(index) {{ return `frames/frame_${{String(index).padStart(6, '0')}}.svg`; }}
+
+    function renderFrame() {{
+      frameEl.src = framePath(state.frame);
+      seekEl.value = String(state.frame);
+      const timeSec = (state.frame - 1) / manifest.source_fps;
+      statusEl.textContent = `frame ${{state.frame}}/${{manifest.frame_count}} • t=${{timeSec.toFixed(3)}}s • source_fps=${{manifest.source_fps}}`;
+    }}
+
+    function tick(ts) {{
+      if (!state.playing) return;
+      if (state.lastTs === null) state.lastTs = ts;
+      const dt = (ts - state.lastTs) / 1000;
+      state.lastTs = ts;
+      state.elapsed += dt * Number(speedEl.value || 1);
+      const targetFps = Math.max(1, Number(fpsEl.value || 1));
+      const outFrame = Math.floor(state.elapsed * targetFps) + 1;
+      const srcFrame = Math.min(manifest.frame_count, Math.max(1, Math.round(((outFrame - 1) / targetFps) * manifest.source_fps) + 1));
+      if (srcFrame !== state.frame) {{
+        state.frame = srcFrame;
+        renderFrame();
+      }}
+      if (state.frame >= manifest.frame_count) state.playing = false;
+      requestAnimationFrame(tick);
+    }}
+
+    document.getElementById('play').onclick = () => {{
+      if (!state.playing) {{ state.playing = true; state.lastTs = null; requestAnimationFrame(tick); }}
+    }};
+    document.getElementById('pause').onclick = () => {{ state.playing = false; }};
+    document.getElementById('reset').onclick = () => {{
+      state.playing = false;
+      state.frame = 1;
+      state.elapsed = 0;
+      state.lastTs = null;
+      renderFrame();
+    }};
+    seekEl.oninput = () => {{ state.frame = Number(seekEl.value); state.elapsed = (state.frame - 1) / Math.max(1, Number(fpsEl.value || 1)); renderFrame(); }};
+    interpolationEl.onchange = () => {{ frameEl.style.imageRendering = interpolationEl.value; }};
+
+    fetch('manifest.json')
+      .then(r => r.json())
+      .then(m => {{
+        manifest = m;
+        seekEl.max = String(manifest.frame_count);
+        fpsEl.value = String(Math.max(1, Math.round(manifest.source_fps)));
+        renderFrame();
+      }});
+  </script>
+</body>
+</html>
+"""
+
+
+def vsv_to_ui(input_vsv: Path, output_dir: Path, title: str, dry_run: bool) -> None:
+    print(f"$ generate ui player in {output_dir}")
+    if dry_run:
+        print(f"$ unzip {input_vsv} -> {output_dir}")
+        print(f"$ write {output_dir / 'index.html'}")
+        return
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(input_vsv) as archive:
+        archive.extractall(output_dir)
+
+    (output_dir / "index.html").write_text(build_ui_html(title), encoding="utf-8")
+
+
 def svg_to_mp4(args: argparse.Namespace) -> int:
     if args.fps < 1:
         print("--fps must be >= 1", file=sys.stderr)
@@ -316,6 +436,9 @@ def main() -> int:
         return 0
     if args.command == "vsv-to-mp4":
         vsv_to_mp4(Path(args.input), Path(args.output), args.fps, args.converter, args.dry_run)
+        return 0
+    if args.command == "vsv-to-ui":
+        vsv_to_ui(Path(args.input), Path(args.output), args.title, args.dry_run)
         return 0
     return 2
 
