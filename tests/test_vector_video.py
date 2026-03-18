@@ -51,11 +51,17 @@ def test_parse_args_vsv_to_ui() -> None:
     assert args.title == "VSV Player"
 
 
-def test_build_ui_html_contains_controls() -> None:
+def test_parse_args_gui() -> None:
+    args = vector_video.parse_args(["gui", "--host", "0.0.0.0", "--port", "9999"])
+    assert args.command == "gui"
+    assert args.port == 9999
+
+
+def test_build_ui_html_contains_gui_controls() -> None:
     html = vector_video.build_ui_html("Demo")
-    assert "Output FPS" in html
-    assert "id=\"speed\"" in html
-    assert "fetch('manifest.json')" in html
+    assert "MP4 → VSV" in html
+    assert "/api/mp4-to-vsv" in html
+    assert "id='speed'" in html
 
 
 def test_vsv_to_ui_extracts_archive_and_writes_index(tmp_path: Path) -> None:
