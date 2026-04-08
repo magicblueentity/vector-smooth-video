@@ -1,71 +1,102 @@
 # vector-smooth-video
 
-Ja — jetzt kannst du **alles im GUI machen**: MP4 hochladen, direkt in VSV umwandeln und anschließend im Player mit variablen Parametern abspielen.
+`vector-smooth-video` ist ein Python-basiertes Toolset zur Konvertierung zwischen rasterbasiertem Video (MP4) und einem vektorbasierten Archivformat (`.vsv`).
 
-## Was ist `.vsv`?
+Das Projekt unterstützt sowohl eine **CLI** für reproduzierbare Workflows als auch eine **PyQt6-Desktop-Oberfläche** für eine einfache, geführte Bedienung.
 
-`.vsv` ist in diesem Projekt ein ZIP-Container mit:
-- `manifest.json` (Auflösung, Quell-FPS, Frame-Anzahl)
+---
+
+## Kernfunktionen
+
+- **SVG-Sequenz → MP4** (`svg-to-mp4`)
+- **MP4 → VSV** (`mp4-to-vsv`)
+- **VSV → MP4** mit frei wählbarer Ziel-FPS (`vsv-to-mp4`)
+- **VSV → statisches UI-Paket** (`vsv-to-ui`)
+- **Desktop-GUI mit PyQt6** (`gui`) für Konvertierung und Playback
+
+---
+
+## Formatübersicht: `.vsv`
+
+Eine `.vsv`-Datei ist ein ZIP-Archiv mit:
+
+- `manifest.json` (z. B. Auflösung, Frame-Anzahl, Quell-FPS)
 - `frames/frame_XXXXXX.svg` (vektorisierte Einzelbilder)
+
+---
 
 ## Voraussetzungen
 
-- `ffmpeg` + `ffprobe`
+### Systemabhängigkeiten
+
+- `ffmpeg` und `ffprobe`
 - Für MP4 → VSV: `vtracer`
-- Für SVG/VSV → MP4: einer von
+- Für SVG/VSV → MP4: einer der folgenden Rasterizer
   - `rsvg-convert` (empfohlen)
   - `inkscape`
-  - oder Python-Paket `cairosvg`
+  - oder das Python-Paket `cairosvg`
 
-## 1) GUI starten (empfohlen)
+### Python
 
-```bash
-python vector_video.py gui --host 127.0.0.1 --port 8765
-```
+- Python 3.10+
+- Für die Desktop-GUI: `PyQt6`
 
-Dann im Browser öffnen: `http://127.0.0.1:8765`
-
-Im GUI kannst du:
-- MP4 hochladen und zu VSV konvertieren (inkl. Download-Link)
-- VSV hochladen und direkt im Player abspielen
-- Playback-Parameter steuern (`Output FPS`, `Speed`, `Seek`, `Play/Pause/Reset`)
-
-## 2) Optional: MP4 zu VSV per CLI
+Beispielinstallation:
 
 ```bash
-python vector_video.py mp4-to-vsv \
-  --input input.mp4 \
-  --output out/video.vsv
+pip install PyQt6 cairosvg
 ```
 
-## 3) Optional: VSV mit beliebiger FPS nach MP4 rendern
+---
+
+## Schnellstart
+
+### 1) Desktop-GUI starten (empfohlen)
 
 ```bash
-python vector_video.py vsv-to-mp4 \
-  --input out/video.vsv \
-  --output out/video_240fps.mp4 \
-  --fps 240
+python vector_video.py gui
 ```
 
-## 4) Optional: VSV als statisches UI-Paket exportieren
+In der GUI können Sie:
+
+- ein MP4 auswählen und direkt in `.vsv` umwandeln,
+- `.vsv`-Dateien laden,
+- Playback mit `Output FPS`, `Speed`, `Seek`, `Play/Pause/Reset` steuern.
+
+### 2) CLI-Beispiele
+
+**MP4 → VSV**
 
 ```bash
-python vector_video.py vsv-to-ui \
-  --input out/video.vsv \
-  --output out/ui-player \
-  --title "Mein VSV Player"
+python vector_video.py mp4-to-vsv --input input.mp4 --output out/video.vsv
 ```
 
-## 5) SVG direkt zu MP4 (bestehender Modus)
+**VSV → MP4 (z. B. 240 FPS)**
 
 ```bash
-python vector_video.py svg-to-mp4 \
-  --input "frames/*.svg" \
-  --output out/animation.mp4 \
-  --fps 60 \
-  --width 1920 \
-  --height 1080 \
-  --supersample 2
+python vector_video.py vsv-to-mp4 --input out/video.vsv --output out/video_240fps.mp4 --fps 240
 ```
 
-Backward-Compatibility: Der alte Aufruf ohne Subcommand funktioniert weiterhin (`--input ... --output ...` wird als `svg-to-mp4` interpretiert).
+**SVG-Sequenz → MP4**
+
+```bash
+python vector_video.py svg-to-mp4 --input "frames/*.svg" --output out/animation.mp4 --fps 60 --width 1920 --height 1080 --supersample 2
+```
+
+**VSV → statisches UI-Paket**
+
+```bash
+python vector_video.py vsv-to-ui --input out/video.vsv --output out/ui-player --title "VSV Player"
+```
+
+---
+
+## Kompatibilität
+
+Der historische Aufruf ohne Subcommand bleibt weiterhin verfügbar:
+
+```bash
+python vector_video.py --input frames/*.svg --output out/animation.mp4
+```
+
+Dieser Aufruf wird automatisch als `svg-to-mp4` interpretiert.

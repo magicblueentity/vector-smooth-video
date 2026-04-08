@@ -52,16 +52,9 @@ def test_parse_args_vsv_to_ui() -> None:
 
 
 def test_parse_args_gui() -> None:
-    args = vector_video.parse_args(["gui", "--host", "0.0.0.0", "--port", "9999"])
+    args = vector_video.parse_args(["gui", "--workspace", "tmp/work"])
     assert args.command == "gui"
-    assert args.port == 9999
-
-
-def test_build_ui_html_contains_gui_controls() -> None:
-    html = vector_video.build_ui_html("Demo")
-    assert "MP4 → VSV" in html
-    assert "/api/mp4-to-vsv" in html
-    assert "id='speed'" in html
+    assert args.workspace == "tmp/work"
 
 
 def test_vsv_to_ui_extracts_archive_and_writes_index(tmp_path: Path) -> None:

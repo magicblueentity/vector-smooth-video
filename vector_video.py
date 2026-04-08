@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import cgi
 import glob
 import json
 import shutil
@@ -13,12 +12,8 @@ import sys
 import tempfile
 import zipfile
 from fractions import Fraction
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Sequence
-from urllib.parse import urlparse
-from uuid import uuid4
+from typing import Callable, Sequence
 
 
 VSV_VERSION = 1
@@ -77,10 +72,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     vsv_to_ui.add_argument("--title", default="VSV Player", help="HTML page title")
     vsv_to_ui.add_argument("--dry-run", action="store_true")
 
-    gui = sub.add_parser("gui", help="Start GUI web app for MP4 -> VSV conversion and playback")
-    gui.add_argument("--host", default="127.0.0.1")
-    gui.add_argument("--port", type=int, default=8765)
-    gui.add_argument("--workspace", default="out/gui-workspace", help="Storage for uploads and generated files")
+    gui = sub.add_parser("gui", help="Start a PyQt6 desktop app for conversion and playback")
+    gui.add_argument("--workspace", default="out/gui-workspace", help="Storage for temporary and generated files")
 
     return parser.parse_args(argv)
 
@@ -241,28 +234,6 @@ def vsv_to_mp4(input_vsv: Path, output_mp4: Path, fps: int, converter: str, dry_
         encode_video(str(frames_dir / "frame_%06d.png"), output_mp4, fps, width, height, dry_run, "sequence", 0)
 
 
-def build_ui_html(title: str) -> str:
-    html = """<!doctype html><html lang='de'><head><meta charset='utf-8'/><meta name='viewport' content='width=device-width,initial-scale=1'/><title>__TITLE__</title>
-<style>body{font-family:system-ui,sans-serif;margin:0;background:#111;color:#eee}.app{max-width:1100px;margin:auto;padding:16px}.card{background:#1b1b1b;border:1px solid #333;border-radius:10px;padding:12px;margin-bottom:12px}.video{background:#fff;min-height:360px;display:flex;justify-content:center;align-items:center;overflow:hidden}#frame{width:100%;max-height:70vh}label{display:block;margin:6px 0}button{padding:8px 10px}</style></head><body>
-<div class='app'><h1>__TITLE__</h1>
-<div class='card'><h2>1) MP4 → VSV (im GUI)</h2><input id='mp4' type='file' accept='video/mp4'/><button id='convert'>Konvertieren</button><p id='convertStatus'></p><a id='download' style='display:none'>VSV herunterladen</a></div>
-<div class='card'><h2>2) VSV laden & abspielen</h2><input id='vsv' type='file' accept='.vsv'/><button id='load'>VSV laden</button><p id='loadStatus'></p><div class='video'><img id='frame' alt='frame'/></div>
-<label>Output FPS <input id='fps' type='number' min='1' value='120'/></label><label>Speed <input id='speed' type='number' min='0.1' step='0.1' value='1'/></label><label>Seek <input id='seek' type='range' min='1' max='1' value='1'/></label>
-<button id='play'>Play</button><button id='pause'>Pause</button><button id='reset'>Reset</button><p id='status'></p></div></div>
-<script>
-let manifest=null,session=null;const state={playing:false,frame:1,elapsed:0,lastTs:null};
-const frameEl=document.getElementById('frame'),fpsEl=document.getElementById('fps'),speedEl=document.getElementById('speed'),seekEl=document.getElementById('seek'),statusEl=document.getElementById('status');
-function framePath(i){return `/session/${session}/frames/frame_${String(i).padStart(6,'0')}.svg`;}
-function render(){if(!manifest)return;frameEl.src=framePath(state.frame);seekEl.value=String(state.frame);statusEl.textContent=`frame ${state.frame}/${manifest.frame_count}`;}
-function tick(ts){if(!state.playing||!manifest)return; if(state.lastTs===null)state.lastTs=ts; const dt=(ts-state.lastTs)/1000; state.lastTs=ts; state.elapsed+=dt*Number(speedEl.value||1); const tfps=Math.max(1,Number(fpsEl.value||1)); const out=Math.floor(state.elapsed*tfps)+1; state.frame=Math.min(manifest.frame_count,Math.max(1,Math.round(((out-1)/tfps)*manifest.source_fps)+1)); render(); if(state.frame>=manifest.frame_count)state.playing=false; requestAnimationFrame(tick);}
-document.getElementById('play').onclick=()=>{if(!state.playing){state.playing=true;state.lastTs=null;requestAnimationFrame(tick);}};document.getElementById('pause').onclick=()=>state.playing=false;document.getElementById('reset').onclick=()=>{state.playing=false;state.frame=1;state.elapsed=0;render();};seekEl.oninput=()=>{state.frame=Number(seekEl.value);render();};
-async function postFile(url,input){const file=input.files[0]; if(!file) throw new Error('Bitte Datei wählen'); const fd=new FormData(); fd.append('file',file,file.name); const r=await fetch(url,{method:'POST',body:fd}); if(!r.ok) throw new Error(await r.text()); return r.json();}
-document.getElementById('convert').onclick=async()=>{const s=document.getElementById('convertStatus'); try{s.textContent='Konvertiere...'; const data=await postFile('/api/mp4-to-vsv',document.getElementById('mp4')); s.textContent=`Fertig: ${data.filename}`; const a=document.getElementById('download'); a.href=data.download_url; a.textContent='Download VSV'; a.style.display='inline';}catch(e){s.textContent=e.message;}};
-document.getElementById('load').onclick=async()=>{const s=document.getElementById('loadStatus'); try{s.textContent='Lade...'; const data=await postFile('/api/load-vsv',document.getElementById('vsv')); manifest=data.manifest; session=data.session_id; seekEl.max=String(manifest.frame_count); fpsEl.value=String(Math.max(1,Math.round(manifest.source_fps))); state.frame=1; state.elapsed=0; render(); s.textContent='Bereit'; }catch(e){s.textContent=e.message;}};
-</script></body></html>"""
-    return html.replace("__TITLE__", title)
-
-
 def vsv_to_ui(input_vsv: Path, output_dir: Path, title: str, dry_run: bool) -> None:
     print(f"$ generate ui player in {output_dir}")
     if dry_run:
@@ -272,97 +243,282 @@ def vsv_to_ui(input_vsv: Path, output_dir: Path, title: str, dry_run: bool) -> N
     output_dir.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(input_vsv) as archive:
         archive.extractall(output_dir)
-    (output_dir / "index.html").write_text(build_ui_html(title), encoding="utf-8")
+    (output_dir / "index.html").write_text(
+        f"""<!doctype html><html><head><meta charset='utf-8'><title>{title}</title></head><body><h1>{title}</h1><p>Use any static file server to open this folder.</p></body></html>""",
+        encoding="utf-8",
+    )
 
 
-def run_gui(host: str, port: int, workspace: Path) -> None:
+def run_gui(workspace: Path) -> None:
+    try:
+        from PyQt6.QtCore import QObject, QRunnable, QThreadPool, QTimer, Qt, pyqtSignal
+        from PyQt6.QtWidgets import (
+            QApplication,
+            QFileDialog,
+            QFormLayout,
+            QGridLayout,
+            QGroupBox,
+            QHBoxLayout,
+            QLabel,
+            QLineEdit,
+            QMainWindow,
+            QMessageBox,
+            QPushButton,
+            QSlider,
+            QSpinBox,
+            QDoubleSpinBox,
+            QVBoxLayout,
+            QWidget,
+        )
+        from PyQt6.QtSvgWidgets import QSvgWidget
+    except ImportError as exc:
+        raise RuntimeError("PyQt6 is required for GUI mode. Install with: pip install PyQt6") from exc
+
     workspace.mkdir(parents=True, exist_ok=True)
 
-    class Handler(BaseHTTPRequestHandler):
-        def _json(self, payload: dict, status: int = 200) -> None:
-            raw = json.dumps(payload).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(raw)))
-            self.end_headers()
-            self.wfile.write(raw)
+    class WorkerSignals(QObject):
+        finished = pyqtSignal(object)
+        error = pyqtSignal(str)
 
-        def do_GET(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            if parsed.path == "/":
-                body = build_ui_html("VSV GUI").encode("utf-8")
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+    class TaskWorker(QRunnable):
+        def __init__(self, task: Callable[[], object]):
+            super().__init__()
+            self.task = task
+            self.signals = WorkerSignals()
+
+        def run(self) -> None:
+            try:
+                result = self.task()
+            except Exception as exc:  # noqa: BLE001
+                self.signals.error.emit(str(exc))
                 return
-            if parsed.path.startswith("/downloads/") or parsed.path.startswith("/session/"):
-                rel = parsed.path.lstrip("/")
-                target = workspace / rel
-                if target.is_file():
-                    data = target.read_bytes()
-                    ctype = "application/octet-stream"
-                    if target.suffix == ".svg":
-                        ctype = "image/svg+xml"
-                    elif target.suffix == ".json":
-                        ctype = "application/json"
-                    elif target.suffix == ".vsv":
-                        ctype = "application/zip"
-                    self.send_response(HTTPStatus.OK)
-                    self.send_header("Content-Type", ctype)
-                    self.send_header("Content-Length", str(len(data)))
-                    self.end_headers()
-                    self.wfile.write(data)
-                    return
-            self.send_error(HTTPStatus.NOT_FOUND)
+            self.signals.finished.emit(result)
 
-        def do_POST(self) -> None:  # noqa: N802
-            parsed = urlparse(self.path)
-            ctype, _ = cgi.parse_header(self.headers.get("Content-Type", ""))
-            if ctype != "multipart/form-data":
-                self._json({"error": "multipart/form-data erwartet"}, 400)
+    class VsvMainWindow(QMainWindow):
+        def __init__(self) -> None:
+            super().__init__()
+            self.setWindowTitle("Vector Smooth Video")
+            self.resize(1100, 760)
+            self.thread_pool = QThreadPool.globalInstance()
+            self.player_timer = QTimer()
+            self.player_timer.timeout.connect(self._tick)
+
+            self.manifest: dict[str, float | int] | None = None
+            self.frame_paths: list[Path] = []
+            self.current_frame = 1
+            self.elapsed = 0.0
+            self.last_source_index = 1
+
+            root = QWidget()
+            self.setCentralWidget(root)
+            layout = QVBoxLayout(root)
+
+            convert_box = QGroupBox("MP4 → VSV")
+            convert_form = QFormLayout(convert_box)
+            mp4_row = QHBoxLayout()
+            self.mp4_input = QLineEdit()
+            self.mp4_browse = QPushButton("Browse…")
+            self.mp4_browse.clicked.connect(self._pick_mp4)
+            mp4_row.addWidget(self.mp4_input)
+            mp4_row.addWidget(self.mp4_browse)
+            convert_form.addRow("Input MP4", mp4_row)
+
+            out_row = QHBoxLayout()
+            self.vsv_output = QLineEdit(str(workspace / "output.vsv"))
+            self.vsv_browse = QPushButton("Save as…")
+            self.vsv_browse.clicked.connect(self._pick_output)
+            out_row.addWidget(self.vsv_output)
+            out_row.addWidget(self.vsv_browse)
+            convert_form.addRow("Output VSV", out_row)
+
+            self.convert_button = QPushButton("Convert")
+            self.convert_button.clicked.connect(self._convert_mp4_to_vsv)
+            self.convert_status = QLabel("Ready")
+            convert_form.addRow(self.convert_button, self.convert_status)
+
+            player_box = QGroupBox("VSV Player")
+            player_layout = QVBoxLayout(player_box)
+            top_row = QGridLayout()
+            self.vsv_input = QLineEdit()
+            self.vsv_load = QPushButton("Open VSV…")
+            self.vsv_load.clicked.connect(self._pick_vsv)
+            self.vsv_load_button = QPushButton("Load")
+            self.vsv_load_button.clicked.connect(self._load_vsv)
+            top_row.addWidget(QLabel("VSV file"), 0, 0)
+            top_row.addWidget(self.vsv_input, 0, 1)
+            top_row.addWidget(self.vsv_load, 0, 2)
+            top_row.addWidget(self.vsv_load_button, 0, 3)
+
+            self.fps_spin = QSpinBox()
+            self.fps_spin.setRange(1, 1000)
+            self.fps_spin.setValue(120)
+            self.speed_spin = QDoubleSpinBox()
+            self.speed_spin.setRange(0.1, 10.0)
+            self.speed_spin.setSingleStep(0.1)
+            self.speed_spin.setValue(1.0)
+            top_row.addWidget(QLabel("Output FPS"), 1, 0)
+            top_row.addWidget(self.fps_spin, 1, 1)
+            top_row.addWidget(QLabel("Speed"), 1, 2)
+            top_row.addWidget(self.speed_spin, 1, 3)
+
+            player_layout.addLayout(top_row)
+
+            self.svg_view = QSvgWidget()
+            self.svg_view.setMinimumHeight(420)
+            player_layout.addWidget(self.svg_view)
+
+            seek_row = QHBoxLayout()
+            self.seek = QSlider()
+            self.seek.setOrientation(Qt.Orientation.Horizontal)
+            self.seek.setMinimum(1)
+            self.seek.setMaximum(1)
+            self.seek.valueChanged.connect(self._seek_frame)
+            seek_row.addWidget(QLabel("Seek"))
+            seek_row.addWidget(self.seek)
+            player_layout.addLayout(seek_row)
+
+            controls = QHBoxLayout()
+            self.play_button = QPushButton("Play")
+            self.pause_button = QPushButton("Pause")
+            self.reset_button = QPushButton("Reset")
+            self.play_button.clicked.connect(self._play)
+            self.pause_button.clicked.connect(self._pause)
+            self.reset_button.clicked.connect(self._reset)
+            controls.addWidget(self.play_button)
+            controls.addWidget(self.pause_button)
+            controls.addWidget(self.reset_button)
+            player_layout.addLayout(controls)
+
+            self.player_status = QLabel("No VSV loaded")
+            player_layout.addWidget(self.player_status)
+
+            layout.addWidget(convert_box)
+            layout.addWidget(player_box)
+
+        def _pick_mp4(self) -> None:
+            filename, _ = QFileDialog.getOpenFileName(self, "Select MP4", str(workspace), "MP4 Files (*.mp4)")
+            if filename:
+                self.mp4_input.setText(filename)
+
+        def _pick_output(self) -> None:
+            filename, _ = QFileDialog.getSaveFileName(self, "Save VSV", str(workspace / "output.vsv"), "VSV Files (*.vsv)")
+            if filename:
+                self.vsv_output.setText(filename)
+
+        def _pick_vsv(self) -> None:
+            filename, _ = QFileDialog.getOpenFileName(self, "Select VSV", str(workspace), "VSV Files (*.vsv)")
+            if filename:
+                self.vsv_input.setText(filename)
+
+        def _convert_mp4_to_vsv(self) -> None:
+            src = Path(self.mp4_input.text().strip())
+            dst = Path(self.vsv_output.text().strip())
+            if not src.is_file():
+                QMessageBox.warning(self, "Invalid input", "Please select a valid MP4 file.")
                 return
-            form = cgi.FieldStorage(fp=self.rfile, headers=self.headers, environ={"REQUEST_METHOD": "POST", "CONTENT_TYPE": self.headers["Content-Type"]})
-            upload = form["file"] if "file" in form else None
-            if upload is None or not upload.file:
-                self._json({"error": "file fehlt"}, 400)
+            if dst.suffix.lower() != ".vsv":
+                QMessageBox.warning(self, "Invalid output", "Output file must end with .vsv")
                 return
 
-            if parsed.path == "/api/mp4-to-vsv":
-                uid = uuid4().hex
-                in_path = workspace / f"upload-{uid}.mp4"
-                out_path = workspace / "downloads" / f"video-{uid}.vsv"
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                in_path.write_bytes(upload.file.read())
-                try:
-                    mp4_to_vsv(in_path, out_path, pick_vectorizer("auto"), dry_run=False)
-                except Exception as exc:  # noqa: BLE001
-                    self._json({"error": str(exc)}, 500)
-                    return
-                self._json({"filename": out_path.name, "download_url": f"/downloads/{out_path.name}"})
+            self.convert_button.setEnabled(False)
+            self.convert_status.setText("Converting…")
+
+            worker = TaskWorker(lambda: mp4_to_vsv(src, dst, pick_vectorizer("auto"), dry_run=False))
+            worker.signals.finished.connect(lambda _result: self._conversion_done(dst))
+            worker.signals.error.connect(self._conversion_error)
+            self.thread_pool.start(worker)
+
+        def _conversion_done(self, output_path: Path) -> None:
+            self.convert_button.setEnabled(True)
+            self.convert_status.setText(f"Created: {output_path}")
+
+        def _conversion_error(self, message: str) -> None:
+            self.convert_button.setEnabled(True)
+            self.convert_status.setText("Conversion failed")
+            QMessageBox.critical(self, "Conversion failed", message)
+
+        def _load_vsv(self) -> None:
+            file_path = Path(self.vsv_input.text().strip())
+            if not file_path.is_file():
+                QMessageBox.warning(self, "Invalid input", "Please select a valid VSV file.")
+                return
+            session_dir = workspace / f"session-{file_path.stem}"
+            if session_dir.exists():
+                shutil.rmtree(session_dir)
+            session_dir.mkdir(parents=True)
+
+            with zipfile.ZipFile(file_path) as archive:
+                archive.extractall(session_dir)
+
+            manifest_path = session_dir / "manifest.json"
+            if not manifest_path.exists():
+                QMessageBox.warning(self, "Invalid VSV", "manifest.json is missing.")
                 return
 
-            if parsed.path == "/api/load-vsv":
-                uid = uuid4().hex
-                session_dir = workspace / "session" / uid
-                session_dir.mkdir(parents=True, exist_ok=True)
-                vsv_path = session_dir / "upload.vsv"
-                vsv_path.write_bytes(upload.file.read())
-                try:
-                    with zipfile.ZipFile(vsv_path) as archive:
-                        archive.extractall(session_dir)
-                    manifest = json.loads((session_dir / "manifest.json").read_text())
-                except Exception as exc:  # noqa: BLE001
-                    self._json({"error": str(exc)}, 400)
-                    return
-                self._json({"session_id": uid, "manifest": manifest})
+            self.manifest = json.loads(manifest_path.read_text())
+            frame_count = int(self.manifest.get("frame_count", 0))
+            if frame_count < 1:
+                QMessageBox.warning(self, "Invalid VSV", "No frames found in archive.")
                 return
+            self.frame_paths = [session_dir / "frames" / f"frame_{index:06d}.svg" for index in range(1, frame_count + 1)]
+            self.seek.setMaximum(frame_count)
+            self.seek.setValue(1)
+            self.fps_spin.setValue(max(1, round(float(self.manifest.get("source_fps", 24)))))
+            self.current_frame = 1
+            self.elapsed = 0.0
+            self.last_source_index = 1
+            self._render_frame(1)
+            self.player_status.setText(f"Loaded {frame_count} frames")
 
-            self.send_error(HTTPStatus.NOT_FOUND)
+        def _render_frame(self, frame_index: int) -> None:
+            if not self.frame_paths:
+                return
+            bounded = min(len(self.frame_paths), max(1, frame_index))
+            frame_path = self.frame_paths[bounded - 1]
+            if frame_path.exists():
+                self.svg_view.load(str(frame_path))
+            self.current_frame = bounded
+            if self.seek.value() != bounded:
+                self.seek.blockSignals(True)
+                self.seek.setValue(bounded)
+                self.seek.blockSignals(False)
+            self.player_status.setText(f"Frame {bounded}/{len(self.frame_paths)}")
 
-    print(f"GUI running on http://{host}:{port}")
-    ThreadingHTTPServer((host, port), Handler).serve_forever()
+        def _seek_frame(self, frame_index: int) -> None:
+            self._render_frame(frame_index)
+
+        def _play(self) -> None:
+            if not self.manifest:
+                return
+            self.player_timer.start(16)
+
+        def _pause(self) -> None:
+            self.player_timer.stop()
+
+        def _reset(self) -> None:
+            self.player_timer.stop()
+            self.elapsed = 0.0
+            self._render_frame(1)
+
+        def _tick(self) -> None:
+            if not self.manifest:
+                return
+            source_fps = float(self.manifest.get("source_fps", 24.0))
+            target_fps = float(self.fps_spin.value())
+            speed = float(self.speed_spin.value())
+            self.elapsed += (1.0 / 60.0) * speed
+            output_frame = max(1, int(self.elapsed * target_fps) + 1)
+            source_index = min(len(self.frame_paths), max(1, round(((output_frame - 1) / target_fps) * source_fps) + 1))
+            if source_index != self.last_source_index:
+                self._render_frame(source_index)
+                self.last_source_index = source_index
+            if source_index >= len(self.frame_paths):
+                self.player_timer.stop()
+
+    app = QApplication(sys.argv)
+    window = VsvMainWindow()
+    window.show()
+    raise SystemExit(app.exec())
 
 
 def svg_to_mp4(args: argparse.Namespace) -> int:
@@ -415,7 +571,7 @@ def main() -> int:
         vsv_to_ui(Path(args.input), Path(args.output), args.title, args.dry_run)
         return 0
     if args.command == "gui":
-        run_gui(args.host, args.port, Path(args.workspace))
+        run_gui(Path(args.workspace))
         return 0
     return 2
 
